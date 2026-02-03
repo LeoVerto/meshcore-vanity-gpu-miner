@@ -43,8 +43,7 @@ typedef struct {
 void            vanity_setup(config& vanity, bool allow_insecure);
 void            vanity_run(config& vanity);
 void __global__ vanity_init(unsigned long long int* seed, curandState* state);
-void __global__ vanity_scan(curandState* state, int* keys_found, int* gpu, int* execution_count);
-bool __device__ b58enc(char* b58, size_t* b58sz, uint8_t* data, size_t binsz);
+void __global__ vanity_scan(curandState* state, int* keys_found, int* gpu, unsigned long long* execution_count);
 
 /* -- Entry Point ----------------------------------------------------------- */
 
@@ -144,7 +143,7 @@ void vanity_setup(config &vanity, bool allow_insecure) {
 			maxActiveBlocks,
 			device.warpSize,
 			device.multiProcessorCount,
-		       	device.maxThreadsPerBlock,
+			device.maxThreadsPerBlock,
 			device.maxThreadsDim[0],
 			device.maxThreadsDim[1],
 			device.maxThreadsDim[2],
@@ -176,22 +175,22 @@ void vanity_run(config &vanity) {
 
 	unsigned long long int  executions_total = 0; 
 	unsigned long long int  executions_this_iteration; 
-	int  executions_this_gpu; 
-        int* dev_executions_this_gpu[100];
+	unsigned long long  executions_this_gpu; 
+	unsigned long long* dev_executions_this_gpu[100];
 
-        int  keys_found_total = 0;
-        int  keys_found_this_iteration;
-        int* dev_keys_found[100]; // not more than 100 GPUs ok!
+	int  keys_found_total = 0;
+	int  keys_found_this_iteration;
+	int* dev_keys_found[100]; // not more than 100 GPUs ok!
 
 	// RTX 4090 optimization - these values work well for high-end GPUs
 	// You can experiment with these values to find the optimal configuration
-	int threadsPerBlock = 256; // 256 threads per block is often optimal
-	int blocksPerGrid = 8192; // For RTX 4090, this provides good occupancy
+	// int threadsPerBlock = 256; // 256 threads per block is often optimal
+	// int blocksPerGrid = 8192; // For RTX 4090, this provides good occupancy
 
 	for (int i = 0; i < MAX_ITERATIONS; ++i) {
 		auto start  = std::chrono::high_resolution_clock::now();
 
-                executions_this_iteration=0;
+		executions_this_iteration=0;
 
 		// Run on all GPUs
 		for (int g = 0; g < gpuCount; ++g) {
@@ -199,24 +198,24 @@ void vanity_run(config &vanity) {
 
 			// For RTX 4090, we're using fixed block/grid size for better performance
 			// Comment out the auto-calculation for better performance
-			/*
+			
 			// Calculate Occupancy
 			int blockSize       = 0,
 			    minGridSize     = 0,
 			    maxActiveBlocks = 0;
 			cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, vanity_scan, 0, 0);
 			cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, vanity_scan, blockSize, 0);
-			*/
+			
 
 			int* dev_g;
 	                cudaMalloc((void**)&dev_g, sizeof(int));
                 	cudaMemcpy( dev_g, &g, sizeof(int), cudaMemcpyHostToDevice ); 
 
 	                cudaMalloc((void**)&dev_keys_found[g], sizeof(int));		
-	                cudaMalloc((void**)&dev_executions_this_gpu[g], sizeof(int));		
+	                cudaMalloc((void**)&dev_executions_this_gpu[g], sizeof(unsigned long long));		
 
 			// Use our optimized thread/block config for RTX 4090
-			vanity_scan<<<blocksPerGrid, threadsPerBlock>>>(vanity.states[g], dev_keys_found[g], dev_g, dev_executions_this_gpu[g]);
+			vanity_scan<<<maxActiveBlocks, blockSize>>>(vanity.states[g], dev_keys_found[g], dev_g, dev_executions_this_gpu[g]);
 
 		}
 
@@ -240,12 +239,12 @@ void vanity_run(config &vanity) {
 		for (int g = 0; g < gpuCount; ++g) {
                 	cudaMemcpy( &keys_found_this_iteration, dev_keys_found[g], sizeof(int), cudaMemcpyDeviceToHost ); 
                 	keys_found_total += keys_found_this_iteration; 
-			//printf("GPU %d found %d keys\n",g,keys_found_this_iteration);
+					printf("GPU %d found %d keys\n",g,keys_found_this_iteration);
 
-                	cudaMemcpy( &executions_this_gpu, dev_executions_this_gpu[g], sizeof(int), cudaMemcpyDeviceToHost ); 
+                	cudaMemcpy( &executions_this_gpu, dev_executions_this_gpu[g], sizeof(unsigned long long), cudaMemcpyDeviceToHost ); 
                 	executions_this_iteration += executions_this_gpu * ATTEMPTS_PER_EXECUTION; 
                 	executions_total += executions_this_gpu * ATTEMPTS_PER_EXECUTION; 
-                        //printf("GPU %d executions: %d\n",g,executions_this_gpu);
+                    printf("GPU %d executions: %llu\n",g,executions_this_gpu);
 		}
 
 		// Print out performance Summary
@@ -276,13 +275,13 @@ void __global__ vanity_init(unsigned long long int* rseed, curandState* state) {
 	curand_init(*rseed + id, id, 0, &state[id]);
 }
 
-void __global__ vanity_scan(curandState* state, int* keys_found, int* gpu, int* exec_count) {
+void __global__ vanity_scan(curandState* state, int* keys_found, int* gpu, unsigned long long* exec_count) {
 	int id = threadIdx.x + (blockIdx.x * blockDim.x);
 
-        atomicAdd(exec_count, 1);
+	atomicAdd(exec_count, 1);
 
 	// Count patterns and calculate pattern lengths more safely
-    	int pattern_lengths[MAX_PATTERNS] = {0}; // Initialize all to 0
+	int pattern_lengths[MAX_PATTERNS] = {0}; // Initialize all to 0
 	int pattern_count = 0;
 
 	// Count valid patterns (non-empty strings) and calculate their lengths
@@ -436,7 +435,7 @@ void __global__ vanity_scan(curandState* state, int* keys_found, int* gpu, int* 
 			RND(S[6],S[7],S[0],S[1],S[2],S[3],S[4],S[5],i+2);
 			RND(S[5],S[6],S[7],S[0],S[1],S[2],S[3],S[4],i+3);
 			RND(S[4],S[5],S[6],S[7],S[0],S[1],S[2],S[3],i+4);
-		 RND(S[3],S[4],S[5],S[6],S[7],S[0],S[1],S[2],i+5);
+		 	RND(S[3],S[4],S[5],S[6],S[7],S[0],S[1],S[2],i+5);
 			RND(S[2],S[3],S[4],S[5],S[6],S[7],S[0],S[1],i+6);
 			RND(S[1],S[2],S[3],S[4],S[5],S[6],S[7],S[0],i+7);
 		}
@@ -530,55 +529,4 @@ void __global__ vanity_scan(curandState* state, int* keys_found, int* gpu, int* 
 	// Copy Random State so that future calls of this kernel/thread/block
 	// don't repeat their sequences.
 	state[id] = localState;
-}
-
-bool __device__ b58enc(
-	char    *b58,
-       	size_t  *b58sz,
-       	uint8_t *data,
-       	size_t  binsz
-) {
-	// Base58 Lookup Table
-	const char b58digits_ordered[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-	const uint8_t *bin = data;
-	int carry;
-	size_t i, j, high, zcount = 0;
-	size_t size;
-	
-	while (zcount < binsz && !bin[zcount])
-		++zcount;
-	
-	size = (binsz - zcount) * 138 / 100 + 1;
-	uint8_t buf[256];
-	memset(buf, 0, size);
-	
-	for (i = zcount, high = size - 1; i < binsz; ++i, high = j)
-	{
-		for (carry = bin[i], j = size - 1; (j > high) || carry; --j)
-		{
-			carry += 256 * buf[j];
-			buf[j] = carry % 58;
-			carry /= 58;
-			if (!j) {
-				// Otherwise j wraps to maxint which is > high
-				break;
-			}
-		}
-	}
-	
-	for (j = 0; j < size && !buf[j]; ++j);
-	
-	if (*b58sz <= zcount + size - j) {
-		*b58sz = zcount + size - j + 1;
-		return false;
-	}
-	
-	if (zcount) memset(b58, '1', zcount);
-	for (i = zcount; j < size; ++i, ++j) b58[i] = b58digits_ordered[buf[j]];
-
-	b58[i] = '\0';
-	*b58sz = i + 1;
-	
-	return true;
 }
