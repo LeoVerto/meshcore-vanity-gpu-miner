@@ -1,12 +1,8 @@
 # Nostr npub Vanity GPU Miner
 
-A fast, GPU-accelerated tool for mining Nostr `npub` vanity addresses using CUDA. It brute-forces ED25519 keypairs and finds ones that match your desired patterns, for custom identities like `npub1sats...` or `npub1dev...`.
+A fast, GPU-accelerated tool for mining Nostr `npub` vanity addresses using CUDA. It brute-forces ED25519 keypairs and finds ones that match your desired patterns.
 
 Built to scratch an itch. Use at your own discretion.
-
-## What does it do?
-
-It generates random ED25519 keypairs and looks for `npub` addresses that match your patterns, using your GPU for maximum speed. Like Bitcoin vanitygen—but for Nostr.
 
 ## Features
 
@@ -23,15 +19,12 @@ Open `src/config.h` to configure the miner behavior:
 - **Patterns**: Add your desired patterns to the `patterns[]` array.
   ```cpp
   __device__ static char const *patterns[] = {
-      "n0str",
-      "n3rd",
-      // Add more patterns here
+    "dead??beef",
+    "beef?beef",
+    // Add more patterns here
+    nullptr,
   };
   ```
-
-- **Pattern Matching Mode**:
-  - `PREFIX_MATCH_ONLY = 1`: Match patterns only at the beginning of npub (after "npub1")
-  - `PREFIX_MATCH_ONLY = 0`: Match patterns anywhere in the npub address
 
 - **Performance Settings**:
   - `ATTEMPTS_PER_EXECUTION`: How many keypairs each GPU thread generates per batch
@@ -81,6 +74,9 @@ make -j$(nproc)
 LD_LIBRARY_PATH=./release ./release/cuda_ed25519_vanity
 ```
 
+## GPU architectures
+If your GPU is older than Ada, modify `GPU_PTX_ARCH` and `GPU_ARCHS` in `src/gpu-common.mk` by following [this blog post](https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/).
+
 ### Insecure Random Source Handling
 By default, if no cryptographically secure random source is available, the program will halt and print an error. If you want to allow fallback to an insecure seed (using the internal clock), you must explicitly pass the `--allow-insecure` flag:
 
@@ -110,10 +106,9 @@ This will display output in your terminal and also write it to `keys.log` for la
 When a match is found, you will see output like:
 
 ```
-===== "n3rd" HiT on GPU 0!
-nsec: nsec1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-npub: npub1n3rdxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-=====================================================================
+===== GPU 0 MATCH for "beef?beef"
+pubkey: beef2beef859a5fxxx
+privkey: 4082fa5a5110bfxxx
 ```
 
 You'll also see progress information showing:
@@ -125,8 +120,8 @@ You'll also see progress information showing:
 You can use the `?` character as a wildcard in your patterns. This is useful for creating more flexible matches:
 
 ```cpp
-// Matches "nostr0", "nostr3", "nostrr", etc.
-"nostr?"
+// Matches "beef", "beef", "beefe", etc.
+"beef?"
 
 // Matches any 3-character combination beginning with "a" and ending with "c"
 "a?c"

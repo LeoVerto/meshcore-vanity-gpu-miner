@@ -540,16 +540,16 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
         unsigned long long pub_prefix;
         memcpy(&pub_prefix, publick, 8);
 
-        for (int pi = 0; pi < pattern_count; ++pi) {
+        for (int i = 0; i < pattern_count; ++i) {
           // Single 64-bit compare covers up to 8 prefix bytes at once.
-          if ((pub_prefix & pat_mask[pi]) != pat_val[pi])
+          if ((pub_prefix & pat_mask[i]) != pat_val[i])
             continue;
 
           // For patterns longer than 8 bytes, check the remaining tail.
           bool matched = true;
-          for (int j = 8; j < pattern_byte_lengths[pi]; ++j) {
-            if ((publick[j] & pattern_byte_masks[pi][j]) !=
-                pattern_bytes[pi][j]) {
+          for (int j = 8; j < pattern_byte_lengths[i]; ++j) {
+            if ((publick[j] & pattern_byte_masks[i][j]) !=
+                pattern_bytes[i][j]) {
               matched = false;
               break;
             }
@@ -558,15 +558,15 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
           if (matched) {
             atomicAdd(keys_found, 1);
 
-            printf("GPU %d MATCH\n", *gpu);
-            printf("privkey: ");
-            for (int n = 0; n < sizeof(privatek); n++) {
-              printf("%02x", (unsigned char)privatek[n]);
-            }
-            printf("\n");
+            printf("===== GPU %d MATCH for \"%s\"\n", *gpu, patterns[i]);
             printf("pubkey: ");
             for (int n = 0; n < sizeof(publick); n++) {
               printf("%02x", (unsigned char)publick[n]);
+            }
+            printf("\n");
+            printf("privkey: ");
+            for (int n = 0; n < sizeof(privatek); n++) {
+              printf("%02x", (unsigned char)privatek[n]);
             }
             printf("\n");
           }
