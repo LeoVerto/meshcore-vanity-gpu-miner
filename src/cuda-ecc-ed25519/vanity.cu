@@ -1,7 +1,6 @@
 #include <chrono>
 #include <random>
 #include <thread>
-#include <vector>
 
 #include <ctime>
 #include <iostream>
@@ -22,9 +21,6 @@
 #include "keypair.cu"
 #include "sc.cu"
 #include "sha512.cu"
-
-// The old, incorrect Bech32 implementation has been removed.
-// The code will now correctly use the functions from bech32.cu.
 
 // Include config.h after all other functions are defined
 #include "../config.h"
@@ -288,10 +284,11 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
   int pattern_byte_lengths[MAX_PATTERNS] = {0};
   unsigned char pattern_bytes[MAX_PATTERNS][64] = {{0}};
   unsigned char pattern_byte_masks[MAX_PATTERNS][64] = {{0}};
+  const char *pattern_strs[MAX_PATTERNS] = {nullptr};
   int pattern_count = 0;
 
   for (int n = 0; n < MAX_PATTERNS; ++n) {
-    if (patterns[n] == NULL)
+    if (patterns[n] == nullptr)
       break;
 
     // Measure hex string length
@@ -299,13 +296,23 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
     while (patterns[n][hex_len] != 0 && hex_len < 128)
       hex_len++;
 
-    if (hex_len < 2 || (hex_len & 1) != 0)
-      continue; // skip empty or odd-length hex strings
+    if (hex_len < 1) {
+      continue;
+    }
 
-    int byte_len = hex_len / 2;
+    // Round up: an odd-length pattern gets a trailing '?' wildcard nibble.
+    int byte_len = (hex_len + 1) / 2;
     for (int b = 0; b < byte_len; ++b) {
       char hi = patterns[n][b * 2];
-      char lo = patterns[n][b * 2 + 1];
+
+      // If the pattern has odd length, the last byte only has a high nibble.
+      // Treat the missing low nibble as '?' (wildcard).
+      char lo;
+      if (b * 2 + 1 < hex_len) {
+        lo = patterns[n][b * 2 + 1];
+      } else {
+        lo = '?';
+      }
 
       unsigned char val = 0, mask = 0;
 
@@ -328,10 +335,11 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
         mask |= 0x0F;
       }
 
-      pattern_bytes[n][b] = val;
-      pattern_byte_masks[n][b] = mask;
+      pattern_bytes[pattern_count][b] = val;
+      pattern_byte_masks[pattern_count][b] = mask;
     }
-    pattern_byte_lengths[n] = byte_len;
+    pattern_byte_lengths[pattern_count] = byte_len;
+    pattern_strs[pattern_count] = patterns[n];
     pattern_count++;
   }
 
@@ -404,10 +412,8 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
   // Thread 0 prints the patterns we're searching for
   if (id == 0) {
     printf("\nSearching for prefixes in pubkeys: ");
-    for (unsigned int n = 0; n < sizeof(patterns) / sizeof(patterns[0]); ++n) {
-      if (pattern_byte_lengths[n] > 0) {
-        printf("\"%s\" ", patterns[n]);
-      }
+    for (int n = 0; n < pattern_count; ++n) {
+      printf("\"%s\" ", pattern_strs[n]);
     }
     printf("\n\n");
   }

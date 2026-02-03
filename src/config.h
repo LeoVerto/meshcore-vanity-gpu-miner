@@ -16,7 +16,7 @@ static int const STOP_AFTER_KEYS_FOUND = 100;
 // Higher values reduce CPU-GPU communication overhead but use more memory
 // For RTX 4090: 10-20 million works well
 // For older GPUs: Try 1-5 million if you experience stability issues
-__device__ const int ATTEMPTS_PER_EXECUTION = 1000000;
+__device__ const int ATTEMPTS_PER_EXECUTION = 100000;
 
 // Maximum number of patterns that can be defined below
 __device__ const int MAX_PATTERNS = 10;
@@ -35,10 +35,10 @@ __device__ const int MAX_PATTERNS = 10;
 // For example: "a?c" matches "abc", "a2c", etc.
 
 __device__ static char const *patterns[] = {
-      "dead??aa",
-      "beef?00",
+    "dead??aa",
+    "beef?ee",
     // Add more patterns here, one per line
-    // NULL entry is added automatically at the end
+    nullptr, // sentinel — must remain last
 };
 
 // ---- DEBUG SETTINGS ----
