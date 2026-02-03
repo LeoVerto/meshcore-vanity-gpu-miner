@@ -35,8 +35,8 @@ __device__ const int MAX_PATTERNS = 10;
 // For example: "a?c" matches "abc", "a2c", etc.
 
 __device__ static char const *patterns[] = {
-      "deadbeef",
-      "beefdead",
+      "dead??aa",
+      "beef?00",
     // Add more patterns here, one per line
     // NULL entry is added automatically at the end
 };

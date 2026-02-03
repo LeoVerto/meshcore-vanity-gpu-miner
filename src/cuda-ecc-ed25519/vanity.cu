@@ -283,8 +283,11 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
 
   // Convert hex pattern strings to raw byte arrays once, outside the hot loop.
   // Each hex pattern like "dead" becomes bytes {0xde, 0xad}.
+  // '?' is a nibble-level wildcard: "d?" matches 0xd0-0xdf, "?5" matches
+  // any byte whose low nibble is 5, "??" matches any byte.
   int pattern_byte_lengths[MAX_PATTERNS] = {0};
   unsigned char pattern_bytes[MAX_PATTERNS][64] = {{0}};
+  unsigned char pattern_byte_masks[MAX_PATTERNS][64] = {{0}};
   int pattern_count = 0;
 
   for (int n = 0; n < MAX_PATTERNS; ++n) {
@@ -303,17 +306,30 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
     for (int b = 0; b < byte_len; ++b) {
       char hi = patterns[n][b * 2];
       char lo = patterns[n][b * 2 + 1];
-      unsigned char nhi =
-          (hi >= '0' && hi <= '9')   ? hi - '0'
-          : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10
-          : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10
-                                     : 0;
-      unsigned char nlo =
-          (lo >= '0' && lo <= '9')   ? lo - '0'
-          : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10
-          : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10
-                                     : 0;
-      pattern_bytes[n][b] = (nhi << 4) | nlo;
+
+      unsigned char val = 0, mask = 0;
+
+      if (hi != '?') {
+        unsigned char nhi =
+            (hi >= '0' && hi <= '9')   ? hi - '0'
+            : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10
+            : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10
+                                       : 0;
+        val |= nhi << 4;
+        mask |= 0xF0;
+      }
+      if (lo != '?') {
+        unsigned char nlo =
+            (lo >= '0' && lo <= '9')   ? lo - '0'
+            : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10
+            : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10
+                                       : 0;
+        val |= nlo;
+        mask |= 0x0F;
+      }
+
+      pattern_bytes[n][b] = val;
+      pattern_byte_masks[n][b] = mask;
     }
     pattern_byte_lengths[n] = byte_len;
     pattern_count++;
@@ -326,6 +342,7 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
 
   // Pack each pattern (up to 8 bytes) into a uint64 value + mask so the
   // hot loop can compare the entire prefix in one 64-bit operation.
+  // Wildcard nibbles have their mask bits zeroed so any value passes.
   unsigned long long pat_val[MAX_PATTERNS];
   unsigned long long pat_mask[MAX_PATTERNS];
 
@@ -335,18 +352,31 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
       continue;
 
     // Populate first-byte bitmap
-    unsigned char fb = pattern_bytes[n][0];
-    first_byte_set[fb >> 3] |= (1 << (fb & 7));
+    unsigned char fb_mask = pattern_byte_masks[n][0];
+    if (fb_mask == 0xFF) {
+      // Fully specified first byte
+      unsigned char fb = pattern_bytes[n][0];
+      first_byte_set[fb >> 3] |= (1 << (fb & 7));
+    } else {
+      // First byte has at least one wildcard nibble -- enumerate all
+      // values that could match and set their bits.
+      for (int v = 0; v < 256; ++v) {
+        if ((v & fb_mask) == pattern_bytes[n][0]) {
+          first_byte_set[v >> 3] |= (1 << (v & 7));
+        }
+      }
+    }
 
     // Pack into little-endian uint64 (matches GPU byte order)
-    unsigned long long v = 0, m = 0;
+    unsigned long long pv = 0, pm = 0;
     int fast_len = blen < 8 ? blen : 8;
     for (int b = 0; b < fast_len; ++b) {
-      v |= ((unsigned long long)pattern_bytes[n][b]) << (b * 8);
-      m |= ((unsigned long long)0xFF) << (b * 8);
+      unsigned long long shift = (unsigned long long)b * 8;
+      pv |= ((unsigned long long)pattern_bytes[n][b]) << shift;
+      pm |= ((unsigned long long)pattern_byte_masks[n][b]) << shift;
     }
-    pat_val[n] = v;
-    pat_mask[n] = m;
+    pat_val[n] = pv;
+    pat_mask[n] = pm;
   }
 
   if (pattern_count == 0 && id == 0) {
@@ -525,7 +555,8 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
           // For patterns longer than 8 bytes, check the remaining tail.
           bool matched = true;
           for (int j = 8; j < pattern_byte_lengths[pi]; ++j) {
-            if (publick[j] != pattern_bytes[pi][j]) {
+            if ((publick[j] & pattern_byte_masks[pi][j]) !=
+                pattern_bytes[pi][j]) {
               matched = false;
               break;
             }
