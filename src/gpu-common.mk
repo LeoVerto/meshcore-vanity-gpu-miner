@@ -1,4 +1,4 @@
-NVCC:=nvcc
+NVCC:=nvcc -t0
 GPU_PTX_ARCH:=compute_89
 GPU_ARCHS?=sm_89
 GPU_CFLAGS:=--gpu-code=$(GPU_ARCHS),$(GPU_PTX_ARCH) --gpu-architecture=$(GPU_PTX_ARCH)
