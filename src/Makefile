@@ -80,3 +80,9 @@ $(RELEASE_DIR)/$(ECC_SCAN_BIN): $(RELEASE_DIR)/ecc_scan.o $(RELEASE_DIR)/lib$(LI
 .PHONY:clean
 clean:
 	rm -rf $(RELEASE_DIR)
+
+.PHONY:clean-vanity
+clean-vanity:
+	rm -f $(RELEASE_DIR)/ecc_scan.o
+	rm -f $(RELEASE_DIR)/cuda_ed25519_vanity
+

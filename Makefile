@@ -25,3 +25,7 @@ endif
 .PHONY:clean
 clean:
 	$(MAKE) V=$(V) -C src RELEASE_DIR=../release clean
+
+.PHONY:clean-vanity
+clean-vanity:
+	$(MAKE) V=$(V) -C src RELEASE_DIR=../release clean-vanity
