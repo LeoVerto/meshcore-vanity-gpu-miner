@@ -1,6 +1,5 @@
 #include <chrono>
 #include <random>
-#include <thread>
 
 #include <ctime>
 #include <iostream>
@@ -159,8 +158,8 @@ void vanity_setup(config &vanity, bool allow_insecure) {
                cudaMemcpyHostToDevice);
 
     cudaMalloc((void **)&(vanity.states[i]),
-               maxActiveBlocks * blockSize * sizeof(curandState));
-    vanity_init<<<maxActiveBlocks, blockSize>>>(dev_rseed, vanity.states[i]);
+               minGridSize * blockSize * sizeof(curandState));
+    vanity_init<<<minGridSize, blockSize>>>(dev_rseed, vanity.states[i]);
   }
 
   printf("END: Initializing Memory\n");
@@ -179,10 +178,26 @@ void vanity_run(config &vanity) {
   int keys_found_this_iteration;
   int *dev_keys_found[100]; // not more than 100 GPUs ok!
 
-  // RTX 4090 optimization - these values work well for high-end GPUs
-  // You can experiment with these values to find the optimal configuration
-  // int threadsPerBlock = 256; // 256 threads per block is often optimal
-  // int blocksPerGrid = 8192; // For RTX 4090, this provides good occupancy
+  // Pre-calculate occupancy and allocate device memory once per GPU.
+  int blockSize[100], minGridSize[100];
+  int *dev_g[100];
+
+  for (int g = 0; g < gpuCount; ++g) {
+    cudaSetDevice(g);
+
+    int maxActiveBlocks = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize[g], &blockSize[g],
+                                       vanity_scan, 0, 0);
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, vanity_scan,
+                                                  blockSize[g], 0);
+
+    cudaMalloc((void **)&dev_g[g], sizeof(int));
+    cudaMemcpy(dev_g[g], &g, sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaMalloc((void **)&dev_keys_found[g], sizeof(int));
+    cudaMalloc((void **)&dev_executions_this_gpu[g],
+               sizeof(unsigned long long));
+  }
 
   for (int i = 0; i < MAX_ITERATIONS; ++i) {
     auto start = std::chrono::high_resolution_clock::now();
@@ -193,44 +208,16 @@ void vanity_run(config &vanity) {
     for (int g = 0; g < gpuCount; ++g) {
       cudaSetDevice(g);
 
-      // For RTX 4090, we're using fixed block/grid size for better performance
-      // Comment out the auto-calculation for better performance
+      // Zero out counters for this iteration
+      cudaMemset(dev_keys_found[g], 0, sizeof(int));
+      cudaMemset(dev_executions_this_gpu[g], 0, sizeof(unsigned long long));
 
-      // Calculate Occupancy
-      int blockSize = 0, minGridSize = 0, maxActiveBlocks = 0;
-      cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, vanity_scan,
-                                         0, 0);
-      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks,
-                                                    vanity_scan, blockSize, 0);
-
-      int *dev_g;
-      cudaMalloc((void **)&dev_g, sizeof(int));
-      cudaMemcpy(dev_g, &g, sizeof(int), cudaMemcpyHostToDevice);
-
-      cudaMalloc((void **)&dev_keys_found[g], sizeof(int));
-      cudaMalloc((void **)&dev_executions_this_gpu[g],
-                 sizeof(unsigned long long));
-
-      // Use our optimized thread/block config for RTX 4090
-      vanity_scan<<<maxActiveBlocks, blockSize>>>(vanity.states[g],
-                                                  dev_keys_found[g], dev_g,
-                                                  dev_executions_this_gpu[g]);
+      vanity_scan<<<minGridSize[g], blockSize[g]>>>(
+          vanity.states[g], dev_keys_found[g], dev_g[g],
+          dev_executions_this_gpu[g]);
     }
 
-    // Print progress while waiting for the kernel to finish, as it can take a
-    // while.
-    cudaError_t err;
-    do {
-      // Don't print a message on every check, just sleep.
-      std::this_thread::sleep_for(std::chrono::seconds(60));
-      err = cudaStreamQuery(0);
-      if (err == cudaErrorNotReady) {
-        printf("Still working on a large batch of keys... please wait.\n");
-        fflush(stdout);
-      }
-    } while (err == cudaErrorNotReady);
-
-    // Synchronize while we wait for kernels to complete.
+    // Wait for kernels to complete.
     cudaDeviceSynchronize();
     auto finish = std::chrono::high_resolution_clock::now();
 
