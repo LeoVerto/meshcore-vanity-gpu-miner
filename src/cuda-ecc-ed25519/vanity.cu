@@ -319,6 +319,36 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
     pattern_count++;
   }
 
+  // Build a 256-bit bitmap of first bytes across all patterns.
+  // A single bit-test in the hot loop rejects candidates whose first
+  // public-key byte doesn't match any pattern, skipping ~99% of keys.
+  unsigned char first_byte_set[32] = {0};
+
+  // Pack each pattern (up to 8 bytes) into a uint64 value + mask so the
+  // hot loop can compare the entire prefix in one 64-bit operation.
+  unsigned long long pat_val[MAX_PATTERNS];
+  unsigned long long pat_mask[MAX_PATTERNS];
+
+  for (int n = 0; n < pattern_count; ++n) {
+    int blen = pattern_byte_lengths[n];
+    if (blen == 0)
+      continue;
+
+    // Populate first-byte bitmap
+    unsigned char fb = pattern_bytes[n][0];
+    first_byte_set[fb >> 3] |= (1 << (fb & 7));
+
+    // Pack into little-endian uint64 (matches GPU byte order)
+    unsigned long long v = 0, m = 0;
+    int fast_len = blen < 8 ? blen : 8;
+    for (int b = 0; b < fast_len; ++b) {
+      v |= ((unsigned long long)pattern_bytes[n][b]) << (b * 8);
+      m |= ((unsigned long long)0xFF) << (b * 8);
+    }
+    pat_val[n] = v;
+    pat_mask[n] = m;
+  }
+
   if (pattern_count == 0 && id == 0) {
     printf("ERROR: No valid patterns defined in config.h\n");
     return;
@@ -478,33 +508,45 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
     ge_scalarmult_base(&A, privatek);
     ge_p3_tobytes(publick, &A);
 
-    for (int i = 0; i < pattern_count; ++i) {
-      int blen = pattern_byte_lengths[i];
-      if (blen == 0)
-        continue;
+    // Fast first-byte rejection: skip all pattern checks when the
+    // leading public key byte doesn't appear in any pattern.
+    {
+      unsigned char fb = publick[0];
+      if (first_byte_set[fb >> 3] & (1 << (fb & 7))) {
+        // At least one pattern shares this first byte -- do full checks.
+        unsigned long long pub_prefix;
+        memcpy(&pub_prefix, publick, 8);
 
-      bool matched = true;
-      for (int j = 0; j < blen; ++j) {
-        if (publick[j] != pattern_bytes[i][j]) {
-          matched = false;
-          break;
-        }
-      }
+        for (int pi = 0; pi < pattern_count; ++pi) {
+          // Single 64-bit compare covers up to 8 prefix bytes at once.
+          if ((pub_prefix & pat_mask[pi]) != pat_val[pi])
+            continue;
 
-      if (matched) {
-        atomicAdd(keys_found, 1);
+          // For patterns longer than 8 bytes, check the remaining tail.
+          bool matched = true;
+          for (int j = 8; j < pattern_byte_lengths[pi]; ++j) {
+            if (publick[j] != pattern_bytes[pi][j]) {
+              matched = false;
+              break;
+            }
+          }
 
-        printf("GPU %d MATCH\n", *gpu);
-        printf("privkey: ");
-        for (int n = 0; n < sizeof(privatek); n++) {
-          printf("%02x", (unsigned char)privatek[n]);
+          if (matched) {
+            atomicAdd(keys_found, 1);
+
+            printf("GPU %d MATCH\n", *gpu);
+            printf("privkey: ");
+            for (int n = 0; n < sizeof(privatek); n++) {
+              printf("%02x", (unsigned char)privatek[n]);
+            }
+            printf("\n");
+            printf("pubkey: ");
+            for (int n = 0; n < sizeof(publick); n++) {
+              printf("%02x", (unsigned char)publick[n]);
+            }
+            printf("\n");
+          }
         }
-        printf("\n");
-        printf("pubkey: ");
-        for (int n = 0; n < sizeof(publick); n++) {
-          printf("%02x", (unsigned char)publick[n]);
-        }
-        printf("\n");
       }
     }
 
