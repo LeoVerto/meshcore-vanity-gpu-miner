@@ -16,17 +16,12 @@ static int const STOP_AFTER_KEYS_FOUND = 100;
 // Higher values reduce CPU-GPU communication overhead but use more memory
 // For RTX 4090: 10-20 million works well
 // For older GPUs: Try 1-5 million if you experience stability issues
-__device__ const int ATTEMPTS_PER_EXECUTION = 10000000;
+__device__ const int ATTEMPTS_PER_EXECUTION = 1000000;
 
 // Maximum number of patterns that can be defined below
 __device__ const int MAX_PATTERNS = 10;
 
 // ---- PATTERN MATCHING SETTINGS ----
-
-// Pattern matching mode:
-// 1 = Only match at the beginning of npub (after "npub1")
-// 0 = Match anywhere in the npub address
-__device__ const int PREFIX_MATCH_ONLY = 1;
 
 // ---- PATTERNS TO SEARCH FOR ----
 // Add your desired vanity patterns here
@@ -40,8 +35,8 @@ __device__ const int PREFIX_MATCH_ONLY = 1;
 // For example: "a?c" matches "abc", "a2c", etc.
 
 __device__ static char const *patterns[] = {
-      "n0str",
-      "n3rd",
+      "dead",
+      "beef",
     // Add more patterns here, one per line
     // NULL entry is added automatically at the end
 };

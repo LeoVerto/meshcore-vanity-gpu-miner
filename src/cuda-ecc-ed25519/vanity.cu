@@ -320,7 +320,6 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
   unsigned char seed[32] = {0};
   unsigned char publick[32] = {0};
   unsigned char privatek[64] = {0};
-  char npub[100] = {0}; // Buffer for bech32 encoded npub
 
   // Start from an Initial Random Seed
   for (int i = 0; i < 32; ++i) {
@@ -334,11 +333,7 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
 
   // Thread 0 prints the patterns we're searching for
   if (id == 0) {
-    if (PREFIX_MATCH_ONLY) {
-      printf("\nSearching for prefixes in npub addresses: ");
-    } else {
-      printf("\nSearching for patterns in npub addresses: ");
-    }
+    printf("\nSearching for prefixes in pubkeys: ");
     for (unsigned int n = 0; n < sizeof(patterns) / sizeof(patterns[0]); ++n) {
       if (pattern_lengths[n] > 0) {
         printf("\"%s\" ", patterns[n]);
@@ -473,64 +468,64 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
     ge_scalarmult_base(&A, privatek);
     ge_p3_tobytes(publick, &A);
 
-    // Convert the public key to npub format
-    uint8_t converted[60];
-    size_t converted_len = 0;
-    convert_bits_8_to_5(converted, &converted_len, publick, 32);
-    bech32_encode(npub, sizeof(npub), "npub", converted, converted_len);
-
-    // Search for patterns in the npub string
     for (int i = 0; i < sizeof(patterns) / sizeof(patterns[0]); ++i) {
-      // Skip empty pattern entries
-      if (pattern_lengths[i] == 0)
-        continue;
 
-      // Get the length of the npub string
-      int npub_len = 0;
-      while (npub[npub_len] != 0 && npub_len < sizeof(npub)) {
-        npub_len++;
-      }
+      for (int j = 0; j < pattern_lengths[i]; ++j) {
 
-      // Determine search range based on PREFIX_MATCH_ONLY setting
-      int max_start_pos =
-          PREFIX_MATCH_ONLY ? 5 : (npub_len - pattern_lengths[i]);
-      int min_start_pos =
-          PREFIX_MATCH_ONLY
-              ? 5
-              : 0; // Start at position 5 for prefix match (after "npub1")
-
-      // Check for matches in the npub string
-      for (int start = min_start_pos; start <= max_start_pos; start++) {
-        bool matched = true;
-        for (int j = 0; j < pattern_lengths[i]; ++j) {
-          // Check if current character matches the pattern
-          // '?' is treated as a wildcard character
-          if (patterns[i][j] != '?' && npub[start + j] != patterns[i][j]) {
-            matched = false;
-            break;
-          }
+        // it doesn't match this prefix, no need to continue
+        // if ( !(prefixes[i][j] == '?') && !(prefixes[i][j] == buf2) ) {
+        if (!(publick[j] == patterns[i][j])) {
+          break;
         }
 
-        if (matched) {
+        // we got to the end of the prefix pattern, it matched!
+        if (j == (pattern_lengths[i] - 1)) {
           atomicAdd(keys_found, 1);
 
-          // Calculate and display nsec for reference
-          char nsec[100] = {0};
-          uint8_t nsec_converted[60];
-          size_t nsec_converted_len = 0;
-          convert_bits_8_to_5(nsec_converted, &nsec_converted_len, seed, 32);
-          bech32_encode(nsec, sizeof(nsec), "nsec", nsec_converted,
-                        nsec_converted_len);
+          printf("GPU %d MATCH\n", *gpu);
+          printf("privkey: ");
+          for (int n = 0; n < sizeof(privatek); n++) {
+            printf("%02x", (unsigned char)privatek[n]);
+          }
+          printf("\n");
+          printf("pubkey: ");
+          for (int n = 0; n < sizeof(publick); n++) {
+            printf("%02x", (unsigned char)publick[n]);
+          }
+          printf("\n");
 
-          printf("===== \"%s\" HiT on GPU %d!\n", patterns[i], *gpu);
-          printf("nsec: %s\n", nsec);
-          printf("npub: %s\n", npub);
-          printf("============================================================="
-                 "========\n\n");
           break;
         }
       }
     }
+
+    // Search for patterns in the private key hex string
+    // for (int i = 0; i < sizeof(patterns) / sizeof(patterns[0]); ++i) {
+    //   // Skip empty pattern entries
+    //   if (pattern_lengths[i] == 0)
+    //     continue;
+
+    //   bool matched = true;
+    //   for (int j = 0; j < pattern_lengths[i]; ++j) {
+    //     // Check if current character matches the pattern
+    //     // '?' is treated as a wildcard character
+    //     if (patterns[i][j] != '?' && privatek[j] != patterns[i][j]) {
+    //       matched = false;
+    //       break;
+    //     }
+    //   }
+
+    //   if (matched) {
+    //     atomicAdd(keys_found, 1);
+
+    //     printf("===== \"%s\" HiT on GPU %d!\n", patterns[i], *gpu);
+    //     printf("priv: %s\n", privatek);
+    //     printf("pub: %s\n", publick);
+    //     printf("==============================================================="
+    //            "======\n\n");
+    //     break;
+    //   }
+    //}
 
     // Increment Seed.
     for (int i = 0; i < 32; ++i) {
