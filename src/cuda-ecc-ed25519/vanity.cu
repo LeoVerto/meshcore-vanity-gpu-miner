@@ -16,9 +16,7 @@
 #include "ed25519.h"
 #include "fixedint.h"
 #include "gpu_common.h"
-#include "gpu_ctx.h"
 
-#include "bech32.cu"
 #include "fe.cu"
 #include "ge.cu"
 #include "keypair.cu"
@@ -283,32 +281,44 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
 
   atomicAdd(exec_count, 1);
 
-  // Count patterns and calculate pattern lengths more safely
-  int pattern_lengths[MAX_PATTERNS] = {0}; // Initialize all to 0
+  // Convert hex pattern strings to raw byte arrays once, outside the hot loop.
+  // Each hex pattern like "dead" becomes bytes {0xde, 0xad}.
+  int pattern_byte_lengths[MAX_PATTERNS] = {0};
+  unsigned char pattern_bytes[MAX_PATTERNS][64] = {{0}};
   int pattern_count = 0;
 
-  // Count valid patterns (non-empty strings) and calculate their lengths
   for (int n = 0; n < MAX_PATTERNS; ++n) {
-    // Check if we've reached the end of the patterns array
-    if (patterns[n] == NULL) {
+    if (patterns[n] == NULL)
       break;
-    }
 
-    // Calculate pattern length safely
-    int letter_count = 0;
-    while (patterns[n][letter_count] != 0 &&
-           letter_count < 100) { // Prevent infinite loop with max length
-      letter_count++;
-    }
+    // Measure hex string length
+    int hex_len = 0;
+    while (patterns[n][hex_len] != 0 && hex_len < 128)
+      hex_len++;
 
-    // Only count non-empty patterns
-    if (letter_count > 0) {
-      pattern_lengths[n] = letter_count;
-      pattern_count++;
+    if (hex_len < 2 || (hex_len & 1) != 0)
+      continue; // skip empty or odd-length hex strings
+
+    int byte_len = hex_len / 2;
+    for (int b = 0; b < byte_len; ++b) {
+      char hi = patterns[n][b * 2];
+      char lo = patterns[n][b * 2 + 1];
+      unsigned char nhi =
+          (hi >= '0' && hi <= '9')   ? hi - '0'
+          : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10
+          : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10
+                                     : 0;
+      unsigned char nlo =
+          (lo >= '0' && lo <= '9')   ? lo - '0'
+          : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10
+          : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10
+                                     : 0;
+      pattern_bytes[n][b] = (nhi << 4) | nlo;
     }
+    pattern_byte_lengths[n] = byte_len;
+    pattern_count++;
   }
 
-  // Safety check - if no valid patterns found, return early
   if (pattern_count == 0 && id == 0) {
     printf("ERROR: No valid patterns defined in config.h\n");
     return;
@@ -335,7 +345,7 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
   if (id == 0) {
     printf("\nSearching for prefixes in pubkeys: ");
     for (unsigned int n = 0; n < sizeof(patterns) / sizeof(patterns[0]); ++n) {
-      if (pattern_lengths[n] > 0) {
+      if (pattern_byte_lengths[n] > 0) {
         printf("\"%s\" ", patterns[n]);
       }
     }
@@ -468,64 +478,35 @@ void __global__ vanity_scan(curandState *state, int *keys_found, int *gpu,
     ge_scalarmult_base(&A, privatek);
     ge_p3_tobytes(publick, &A);
 
-    for (int i = 0; i < sizeof(patterns) / sizeof(patterns[0]); ++i) {
+    for (int i = 0; i < pattern_count; ++i) {
+      int blen = pattern_byte_lengths[i];
+      if (blen == 0)
+        continue;
 
-      for (int j = 0; j < pattern_lengths[i]; ++j) {
-
-        // it doesn't match this prefix, no need to continue
-        // if ( !(prefixes[i][j] == '?') && !(prefixes[i][j] == buf2) ) {
-        if (!(publick[j] == patterns[i][j])) {
-          break;
-        }
-
-        // we got to the end of the prefix pattern, it matched!
-        if (j == (pattern_lengths[i] - 1)) {
-          atomicAdd(keys_found, 1);
-
-          printf("GPU %d MATCH\n", *gpu);
-          printf("privkey: ");
-          for (int n = 0; n < sizeof(privatek); n++) {
-            printf("%02x", (unsigned char)privatek[n]);
-          }
-          printf("\n");
-          printf("pubkey: ");
-          for (int n = 0; n < sizeof(publick); n++) {
-            printf("%02x", (unsigned char)publick[n]);
-          }
-          printf("\n");
-
+      bool matched = true;
+      for (int j = 0; j < blen; ++j) {
+        if (publick[j] != pattern_bytes[i][j]) {
+          matched = false;
           break;
         }
       }
+
+      if (matched) {
+        atomicAdd(keys_found, 1);
+
+        printf("GPU %d MATCH\n", *gpu);
+        printf("privkey: ");
+        for (int n = 0; n < sizeof(privatek); n++) {
+          printf("%02x", (unsigned char)privatek[n]);
+        }
+        printf("\n");
+        printf("pubkey: ");
+        for (int n = 0; n < sizeof(publick); n++) {
+          printf("%02x", (unsigned char)publick[n]);
+        }
+        printf("\n");
+      }
     }
-
-    // Search for patterns in the private key hex string
-    // for (int i = 0; i < sizeof(patterns) / sizeof(patterns[0]); ++i) {
-    //   // Skip empty pattern entries
-    //   if (pattern_lengths[i] == 0)
-    //     continue;
-
-    //   bool matched = true;
-    //   for (int j = 0; j < pattern_lengths[i]; ++j) {
-    //     // Check if current character matches the pattern
-    //     // '?' is treated as a wildcard character
-    //     if (patterns[i][j] != '?' && privatek[j] != patterns[i][j]) {
-    //       matched = false;
-    //       break;
-    //     }
-    //   }
-
-    //   if (matched) {
-    //     atomicAdd(keys_found, 1);
-
-    //     printf("===== \"%s\" HiT on GPU %d!\n", patterns[i], *gpu);
-    //     printf("priv: %s\n", privatek);
-    //     printf("pub: %s\n", publick);
-    //     printf("==============================================================="
-    //            "======\n\n");
-    //     break;
-    //   }
-    //}
 
     // Increment Seed.
     for (int i = 0; i < 32; ++i) {
