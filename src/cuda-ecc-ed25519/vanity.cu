@@ -103,6 +103,11 @@ unsigned long long int makeSeed(bool allow_insecure = false) {
   return seed;
 }
 
+	// RTX 4090 optimization - these values work well for high-end GPUs
+	// You can experiment with these values to find the optimal configuration
+	int threadsPerBlock = 256; // 256 threads per block is often optimal
+	int blocksPerGrid = 1024; // For RTX 4090, this provides good occupancy
+
 /* -- Vanity Step Functions ------------------------------------------------- */
 
 void vanity_setup(config &vanity, bool allow_insecure) {
@@ -158,8 +163,8 @@ void vanity_setup(config &vanity, bool allow_insecure) {
                cudaMemcpyHostToDevice);
 
     cudaMalloc((void **)&(vanity.states[i]),
-               minGridSize * blockSize * sizeof(curandState));
-    vanity_init<<<minGridSize, blockSize>>>(dev_rseed, vanity.states[i]);
+               blocksPerGrid * threadsPerBlock * sizeof(curandState));
+    vanity_init<<<blocksPerGrid, threadsPerBlock>>>(dev_rseed, vanity.states[i]);
   }
 
   printf("END: Initializing Memory\n");
@@ -179,17 +184,18 @@ void vanity_run(config &vanity) {
   int *dev_keys_found[100]; // not more than 100 GPUs ok!
 
   // Pre-calculate occupancy and allocate device memory once per GPU.
-  int blockSize[100], minGridSize[100];
+  // int blockSize[100], minGridSize[100];
   int *dev_g[100];
 
   for (int g = 0; g < gpuCount; ++g) {
     cudaSetDevice(g);
 
-    int maxActiveBlocks = 0;
-    cudaOccupancyMaxPotentialBlockSize(&minGridSize[g], &blockSize[g],
-                                       vanity_scan, 0, 0);
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, vanity_scan,
-                                                  blockSize[g], 0);
+    // Way too small, use hand-optimized valued
+    // int maxActiveBlocks = 0;
+    // cudaOccupancyMaxPotentialBlockSize(&minGridSize[g], &blockSize[g],
+    //                                    vanity_scan, 0, 0);
+    // cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, vanity_scan,
+    //                                               blockSize[g], 0);
 
     cudaMalloc((void **)&dev_g[g], sizeof(int));
     cudaMemcpy(dev_g[g], &g, sizeof(int), cudaMemcpyHostToDevice);
@@ -212,7 +218,7 @@ void vanity_run(config &vanity) {
       cudaMemset(dev_keys_found[g], 0, sizeof(int));
       cudaMemset(dev_executions_this_gpu[g], 0, sizeof(unsigned long long));
 
-      vanity_scan<<<minGridSize[g], blockSize[g]>>>(
+      vanity_scan<<<blocksPerGrid, threadsPerBlock>>>(
           vanity.states[g], dev_keys_found[g], dev_g[g],
           dev_executions_this_gpu[g]);
     }
