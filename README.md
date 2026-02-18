@@ -1,14 +1,14 @@
-# Nostr npub Vanity GPU Miner
+# Meshcore Vanity GPU Miner
 
-A fast, GPU-accelerated tool for mining Nostr `npub` vanity addresses using CUDA. It brute-forces ED25519 keypairs and finds ones that match your desired patterns.
+A fast, GPU-accelerated tool for mining vanity public keys for Meshcore using CUDA. It brute-forces ED25519 keypairs and finds ones whose hex-encoded public keys match your desired patterns.
 
-Built to scratch an itch. Use at your own discretion.
+Built to scratch an itch. Rewritten from nostr to Meshcore using Claude Code. The cryptographic implementation is **unverified** — use at your own discretion. Should someone crack this, they will be able to impersonate you on Meshcore and take over any repeaters you have access to.
 
 ## Features
 
-- **GPU acceleration** – CUDA lets it crank through millions of keypairs per second
+- **GPU acceleration** – CUDA lets it crank through millions of keypairs per second (20M/s on a GTX 4070)
 - **Multiple pattern support** – Search for several patterns at once
-- **Flexible matching** – Match at the start of the `npub` or anywhere inside
+- **Flexible matching** – Match at the start of the public key or anywhere inside
 - **Wildcard support** – Use `?` as a wildcard in your patterns
 - **Live stats** – See current attempts per second and total progress
 - **Probably secure-ish** – Uses system entropy and good intentions. Don't trust it with anything you can't lose.
@@ -50,8 +50,8 @@ distrobox enter cudaenv
 sudo apt update
 sudo apt install -y build-essential git cmake wget curl gnupg lsb-release gcc-12 g++-12
 
-git clone https://github.com/MrJohnsson77/nostr-npub-vanity-gpu-miner.git
-cd nostr-npub-vanity-gpu-miner
+git clone https://github.com/LeoVerto/meshcore-vanity-gpu-miner.git
+cd meshcore-vanity-gpu-miner
 export PATH=/usr/local/cuda/bin:$PATH
 make -j\$(nproc)
 ```
@@ -63,8 +63,8 @@ sudo apt update
 sudo apt install nvidia-cuda-toolkit build-essential build-essential git cmake wget curl gnupg lsb-release gcc-12 g++-12
 
 # Clone and build
-git clone https://github.com/MrJohnsson77/nostr-npub-vanity-gpu-miner.git
-cd nostr-npub-vanity-gpu-miner
+git clone https://github.com/LeoVerto/meshcore-vanity-gpu-miner.git
+cd meshcore-vanity-gpu-miner
 make -j$(nproc)
 ```
 
@@ -144,7 +144,9 @@ No warranties, no liability, no hand-holding. Use at your own risk, or not at al
 
 # Licensing Notice
 
-This project includes code under multiple open source licenses:
+This project is a fork of [MrJohnsson77/nostr-npub-vanity-gpu-miner](https://github.com/MrJohnsson77/nostr-npub-vanity-gpu-miner), adapted for Meshcore.
+
+It includes code under multiple open source licenses:
 
 - Parts from [ChorusOne/solanity](https://github.com/ChorusOne/solanity) and [mcf-rocks/solanity](https://github.com/mcf-rocks/solanity) are licensed under the Apache License 2.0.
 - Parts from [vikulin/ed25519-gpu-vanity](https://github.com/vikulin/ed25519-gpu-vanity) are licensed under the GNU General Public License (GPL).
